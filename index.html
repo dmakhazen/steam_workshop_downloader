@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SteamMod Manager</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header class="app-header">
+    <button id="sidebarToggle" class="ghost-btn mobile-only" aria-label="Открыть меню">☰</button>
+    <div class="brand">SteamMod Manager</div>
+    <label class="header-control">
+      <span>Игра</span>
+      <select id="gameSelect"></select>
+    </label>
+  </header>
+
+  <div class="app-layout">
+    <aside id="sidebar" class="sidebar">
+      <section class="panel">
+        <h2>Фильтры мастерской</h2>
+        <label>
+          <span>Сортировка</span>
+          <select id="sortSelect">
+            <option value="trend">Популярное</option>
+            <option value="totaluniquesubscribers">Всего подписчиков</option>
+            <option value="lastupdated">Недавно обновлено</option>
+            <option value="textsearch">Поиск по названию</option>
+          </select>
+        </label>
+        <label id="searchWrap" class="hidden">
+          <span>Поиск</span>
+          <input id="searchInput" type="text" placeholder="Введите название..." />
+        </label>
+        <label>
+          <span>Теги (через запятую)</span>
+          <input id="tagsInput" type="text" placeholder="combat, qol" />
+        </label>
+        <label>
+          <span>Период</span>
+          <select id="daysSelect">
+            <option value="">Любой</option>
+            <option value="1">1 день</option>
+            <option value="7">7 дней</option>
+            <option value="30">30 дней</option>
+            <option value="90">90 дней</option>
+            <option value="365">365 дней</option>
+          </select>
+        </label>
+      </section>
+
+      <section class="panel">
+        <h2>Фильтры каталога</h2>
+        <label>
+          <span>Поиск в Steam Workshop</span>
+          <input id="catalogSteamSearchInput" type="text" placeholder="Например: combat extended" />
+        </label>
+        <label>
+          <span>Мин. подписчиков</span>
+          <select id="catalogMinSubsSelect">
+            <option value="0">Любое</option>
+            <option value="500">500+</option>
+            <option value="1000">1 000+</option>
+            <option value="5000">5 000+</option>
+            <option value="10000">10 000+</option>
+            <option value="50000">50 000+</option>
+          </select>
+        </label>
+        <label>
+          <span>Мин. рейтинг</span>
+          <select id="catalogMinStarsSelect">
+            <option value="0">Любой</option>
+            <option value="3">3★ и выше</option>
+            <option value="4">4★ и выше</option>
+            <option value="5">5★</option>
+          </select>
+        </label>
+        <label>
+          <span>Тег (быстрый)</span>
+          <select id="catalogTagPresetSelect">
+            <option value="">Любой</option>
+            <option value="Mod">Mod</option>
+            <option value="Translation">Translation</option>
+            <option value="Scenario">Scenario</option>
+            <option value="1.6">1.6</option>
+            <option value="1.5">1.5</option>
+          </select>
+        </label>
+        <label>
+          <span>Сортировка карточек</span>
+          <select id="catalogSortSelect">
+            <option value="relevance">По релевантности загрузки</option>
+            <option value="subscribers">По подписчикам</option>
+            <option value="favorites">По избранному</option>
+            <option value="rating">По рейтингу</option>
+            <option value="title">По названию (A-Z)</option>
+          </select>
+        </label>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head">
+          <h2>Мои списки</h2>
+          <button id="createListBtn" class="accent-btn">+ Создать список</button>
+        </div>
+        <ul id="listsContainer" class="lists"></ul>
+      </section>
+
+      <section class="panel actions-panel">
+        <h2>Действия со списком</h2>
+
+        <div class="action-group">
+          <h3>Экспорт / импорт списка</h3>
+          <div class="actions">
+            <button id="exportJsonBtn" class="accent-btn strong-action">⬇ JSON</button>
+            <label class="accent-btn strong-action file-label" for="importJsonInput">⬆ JSON</label>
+            <input id="importJsonInput" type="file" accept="application/json" hidden />
+          </div>
+        </div>
+
+        <div class="action-group">
+          <h3>Загрузка модов</h3>
+          <div class="actions single-col">
+            <button id="openSteamCmdModalBtn" class="accent-btn">Скачать через SteamCMD</button>
+            <button id="openAltDownloadModalBtn" class="ghost-btn">Скачать через другие сайты</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>Активный список: <span id="activeListName">—</span></h2>
+        <div class="mod-form">
+          <input id="modLinkInput" type="url" placeholder="Вставь ссылку на мод" />
+          <input id="modNameInput" type="text" placeholder="Имя мода (необязательно)" />
+          <button id="addModBtn" class="accent-btn">Добавить в активный список</button>
+        </div>
+        <ul id="modsContainer" class="mods"></ul>
+      </section>
+    </aside>
+
+    <main class="main-content">
+      <section class="catalog-panel">
+        <div class="catalog-head">
+          <h2>Каталог модов (без iframe)</h2>
+        </div>
+
+        <div class="catalog-main-actions">
+          <button id="loadCatalogBtn" class="accent-btn primary-load-btn">Загрузить моды</button>
+          <div id="catalogLoadProgress" class="load-progress hidden">Загрузка...</div>
+          <button id="enrichCatalogBtn" class="ghost-btn">Обогатить карточки</button>
+          <label>
+            <span>Модов за загрузку</span>
+            <select id="catalogCountSelect">
+              <option value="30" selected>30</option>
+              <option value="50">50</option>
+              <option value="75">75</option>
+              <option value="100">100</option>
+            </select>
+          </label>
+          <div class="view-modes">
+            <button id="viewDefaultBtn" class="ghost-btn active">По умолчанию</button>
+            <button id="viewLargeBtn" class="ghost-btn">Крупные</button>
+            <button id="viewListBtn" class="ghost-btn">Список</button>
+          </div>
+        </div>
+
+        <div class="catalog-pagination">
+          <button id="catalogPrevPageBtn" class="ghost-btn">← Пред</button>
+          <div id="catalogPageDisplay" class="page-display">Страница: 1</div>
+          <button id="catalogNextPageBtn" class="ghost-btn">След →</button>
+          <label>
+            <span>Перейти к странице</span>
+            <input id="catalogGoPageInput" type="text" inputmode="numeric" placeholder="Напр. 5" />
+          </label>
+          <button id="catalogGoPageBtn" class="ghost-btn">Перейти</button>
+        </div>
+        <p class="catalog-note">Карточки загружаются через публичный прокси (без Steam API ключей). Если временно не работает — попробуй обновить позже.</p>
+        <div id="catalogStatus" class="catalog-status">Нажми «Загрузить моды», чтобы получить список.</div>
+        <div id="catalogDebug" class="catalog-debug">Парсинг: —</div>
+        <div id="catalogStats" class="catalog-stats">Статистика появится после первой загрузки.</div>
+        <ul id="catalogMods" class="catalog-mods view-default"></ul>
+      </section>
+
+    </main>
+  </div>
+
+  <div id="steamCmdModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="steamCmdTitle">
+    <div class="modal-content">
+      <div class="modal-head">
+        <h3 id="steamCmdTitle">Скачать через SteamCMD</h3>
+        <button id="closeSteamCmdModalBtn" class="ghost-btn" aria-label="Закрыть">✕</button>
+      </div>
+      <div class="steamcmd-help">
+        <p>1) Установи SteamCMD на ПК.</p>
+        <p>2) Скачай скрипт ниже и запусти его рядом с SteamCMD.</p>
+        <p>3) Скрипт скачает все моды активного списка в отдельную папку.</p>
+        <div class="actions">
+          <button id="downloadBatBtn" class="accent-btn">⬇ Скачать .bat (Windows)</button>
+          <button id="downloadShBtn" class="ghost-btn">⬇ Скачать .sh (Linux)</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="altDownloadModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="altDownloadTitle">
+    <div class="modal-content">
+      <div class="modal-head">
+        <h3 id="altDownloadTitle">Скачать через другие сайты</h3>
+        <button id="closeAltDownloadModalBtn" class="ghost-btn" aria-label="Закрыть">✕</button>
+      </div>
+      <div class="alt-download-content">
+        <label>
+          <span>Выбери сервис</span>
+          <select id="altServiceSelect">
+            <option value="workshopdl">WorkshopDL (прямые ссылки по mod id)</option>
+            <option value="steamworkshopdownloader">Steamworkshopdownloader.io (прямые ссылки по mod id)</option>
+            <option value="steamrip">SteamRIP (откроется сайт + файл со ссылками)</option>
+            <option value="ggdeals">gg.deals (откроется сайт + файл со ссылками)</option>
+          </select>
+        </label>
+        <p class="catalog-note">Одна кнопка запустит скачивание всех модов активного списка: для прямых сервисов откроются ссылки по mod id, для общих сервисов откроется сайт и сохранится файл со списком ссылок.</p>
+        <button id="downloadAllAltBtn" class="accent-btn">Скачать все моды из активного списка</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="modDetailModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="modDetailTitle">
+    <div class="modal-content">
+      <div class="modal-head">
+        <h3 id="modDetailTitle">Детали мода</h3>
+        <button id="closeModDetailBtn" class="ghost-btn" aria-label="Закрыть">✕</button>
+      </div>
+      <div id="modDetailBody" class="mod-detail-body"></div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
