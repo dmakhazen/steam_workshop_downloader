@@ -1227,14 +1227,6 @@ function getAltServiceUrls(serviceKey, modId) {
     return [`https://steamworkshopdownloader.io/?id=${encodedId}`];
   }
 
-  if (serviceKey === 'steamrip') {
-    return ['https://steamrip.com/'];
-  }
-
-  if (serviceKey === 'ggdeals') {
-    return ['https://gg.deals/'];
-  }
-
   return [];
 }
 
@@ -1271,21 +1263,12 @@ function downloadAllModsViaAltService() {
     }, index * 120);
   });
 
-  const workshopLinksText = activeList.mods
-    .map((mod) => `https://steamcommunity.com/sharedfiles/filedetails/?id=${mod.id}`)
-    .join('\n');
-
-  if (serviceKey === 'steamrip' || serviceKey === 'ggdeals') {
-    downloadTextFile(`${sanitizeListName(activeList.name)}_mods_links.txt`, workshopLinksText);
-    alert('Открыл сайт и сохранил файл со ссылками на моды.');
-  } else {
-    setTimeout(() => {
-      if (opened === 0) {
-        downloadTextFile(`${sanitizeListName(activeList.name)}_download_links.txt`, allLinks.join('\n'));
-        alert('Браузер заблокировал всплывающие окна. Сохранил файл со ссылками для скачивания.');
-      }
-    }, allLinks.length * 140 + 200);
-  }
+  setTimeout(() => {
+    if (opened === 0) {
+      downloadTextFile(`${sanitizeListName(activeList.name)}_download_links.txt`, allLinks.join('\n'));
+      alert('Браузер заблокировал всплывающие окна. Сохранил файл со ссылками для скачивания.');
+    }
+  }, allLinks.length * 140 + 200);
 
   elements.altDownloadModal.classList.add('hidden');
 }
