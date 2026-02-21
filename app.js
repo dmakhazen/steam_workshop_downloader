@@ -1,7 +1,8 @@
 const STORAGE_KEYS = {
   lists: 'steammod_lists',
   activeListId: 'steammod_active_list',
-  selectedGame: 'steammod_selected_game'
+  selectedGame: 'steammod_selected_game',
+  preferredProxy: 'steammod_preferred_proxy'
 };
 
 const GAMES = [
@@ -24,7 +25,10 @@ const state = {
   catalogSessionLoadedIds: new Set(),
   catalogContextKey: '',
   catalogParseMode: '—',
-  catalogExtractedCount: 0
+  catalogExtractedCount: 0,
+  catalogPageCooldownUntil: 0,
+  autoFullCatalog: false,
+  preferredProxy: 'auto'
 };
 
 const elements = {
@@ -41,7 +45,7 @@ const elements = {
   catalogGoPageBtn: document.getElementById('catalogGoPageBtn'),
   loadCatalogBtn: document.getElementById('loadCatalogBtn'),
   catalogLoadProgress: document.getElementById('catalogLoadProgress'),
-  enrichCatalogBtn: document.getElementById('enrichCatalogBtn'),
+  catalogAutoFullToggle: document.getElementById('catalogAutoFullToggle'),
   catalogSteamSearchInput: document.getElementById('catalogSteamSearchInput'),
   catalogMinSubsSelect: document.getElementById('catalogMinSubsSelect'),
   catalogMinStarsSelect: document.getElementById('catalogMinStarsSelect'),
@@ -49,6 +53,8 @@ const elements = {
   catalogSortSelect: document.getElementById('catalogSortSelect'),
   catalogCountSelect: document.getElementById('catalogCountSelect'),
   catalogStatus: document.getElementById('catalogStatus'),
+  proxyPrioritySelect: document.getElementById('proxyPrioritySelect'),
+  proxyStatus: document.getElementById('proxyStatus'),
   catalogDebug: document.getElementById('catalogDebug'),
   catalogStats: document.getElementById('catalogStats'),
   catalogMods: document.getElementById('catalogMods'),
@@ -83,12 +89,94 @@ const elements = {
 };
 
 const detailCache = new Map();
+const detailInFlight = new Map();
+const PAGINATION_LABELS = {
+  prev: '← Пред',
+  next: 'След →',
+  go: 'Перейти',
+  wait: 'Подождите'
+};
+
+function getHostLabel(url) {
+  try {
+    return new URL(url).hostname;
+  } catch {
+    return String(url || 'unknown');
+  }
+}
+
+function setProxyStatus({ phase = 'Загрузка', url = '', status = null, ok = null, message = '' } = {}) {
+  if (!elements.proxyStatus) {
+    return;
+  }
+
+  elements.proxyStatus.classList.remove('proxy-status--info', 'proxy-status--ok', 'proxy-status--error');
+
+  if (ok === true) {
+    elements.proxyStatus.classList.add('proxy-status--ok');
+  } else if (ok === false) {
+    elements.proxyStatus.classList.add('proxy-status--error');
+  } else {
+    elements.proxyStatus.classList.add('proxy-status--info');
+  }
+
+  const statusText = Number.isFinite(Number(status)) ? `HTTP ${status}` : 'без HTTP статуса';
+  const hostText = url ? ` · ${getHostLabel(url)}` : '';
+  const suffix = message ? ` · ${message}` : '';
+  const verdict = ok === true ? 'успех' : ok === false ? 'ошибка' : 'ожидание';
+
+  elements.proxyStatus.textContent = `${phase}: ${verdict} · ${statusText}${hostText}${suffix}`;
+}
 
 function setCatalogLoading(loading, text = '') {
   state.isCatalogLoading = loading;
   elements.loadCatalogBtn.disabled = loading;
   elements.catalogLoadProgress.classList.toggle('hidden', !loading && !text);
   elements.catalogLoadProgress.textContent = text || (loading ? 'Загрузка...' : '');
+  updateCatalogPageUI();
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isCatalogPageCooldownActive() {
+  return Date.now() < state.catalogPageCooldownUntil;
+}
+
+function setCatalogPageCooldown(ms = 1000) {
+  state.catalogPageCooldownUntil = Date.now() + Math.max(0, Number(ms) || 0);
+  updateCatalogPageUI();
+  setTimeout(() => {
+    if (Date.now() >= state.catalogPageCooldownUntil) {
+      state.catalogPageCooldownUntil = 0;
+      updateCatalogPageUI();
+    }
+  }, Math.max(0, Number(ms) || 0) + 20);
+}
+
+function reorderProxyUrls(proxyUrls) {
+  const preferred = state.preferredProxy;
+  if (!Array.isArray(proxyUrls) || preferred === 'auto') {
+    return proxyUrls;
+  }
+
+  const matches = (url) => {
+    const host = getHostLabel(url);
+    if (preferred === 'rjina') {
+      return host.includes('r.jina.ai');
+    }
+
+    if (preferred === 'allorigins') {
+      return host.includes('allorigins.win');
+    }
+
+    return false;
+  };
+
+  const priority = proxyUrls.filter((url) => matches(url));
+  const rest = proxyUrls.filter((url) => !matches(url));
+  return [...priority, ...rest];
 }
 
 function uniqueId(prefix = 'id') {
@@ -108,6 +196,7 @@ function saveState() {
   localStorage.setItem(STORAGE_KEYS.lists, JSON.stringify(state.lists));
   localStorage.setItem(STORAGE_KEYS.activeListId, state.activeListId || '');
   localStorage.setItem(STORAGE_KEYS.selectedGame, state.selectedGame);
+  localStorage.setItem(STORAGE_KEYS.preferredProxy, state.preferredProxy);
 }
 
 function loadState() {
@@ -120,9 +209,11 @@ function loadState() {
 
   const storedActive = localStorage.getItem(STORAGE_KEYS.activeListId);
   const storedGame = localStorage.getItem(STORAGE_KEYS.selectedGame);
+  const storedPreferredProxy = localStorage.getItem(STORAGE_KEYS.preferredProxy);
 
   state.activeListId = storedActive || null;
   state.selectedGame = GAMES.some((game) => game.appid === storedGame) ? storedGame : '294100';
+  state.preferredProxy = ['auto', 'rjina', 'allorigins'].includes(storedPreferredProxy) ? storedPreferredProxy : 'auto';
 
   if (state.lists.length === 0) {
     const defaultList = {
@@ -178,9 +269,9 @@ function buildCatalogUrl(page = state.catalogPage) {
     params.set('days', days);
   }
 
-  const count = Number(elements.catalogCountSelect.value || 30);
+  const count = Number(elements.catalogCountSelect.value || 15);
   if (count) {
-    params.set('numperpage', String(count));
+    params.set('numperpage', String(Math.max(30, count)));
   }
 
   const targetPage = Math.max(1, Number(page || 1));
@@ -383,8 +474,115 @@ function parseBasicModsFromMarkdown(text) {
   return result;
 }
 
+function normalizeSteamUrl(url) {
+  const value = String(url || '').trim();
+  if (!value) {
+    return '';
+  }
+
+  if (value.startsWith('//')) {
+    return `https:${value}`;
+  }
+
+  if (value.startsWith('/')) {
+    return `https://steamcommunity.com${value}`;
+  }
+
+  return value;
+}
+
+function parseModsFromHtml(text) {
+  const content = String(text || '');
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(content, 'text/html');
+  const cards = [...doc.querySelectorAll('.workshopItem')];
+  const byId = new Map();
+
+  const collectFromCard = (card) => {
+    const linkElement = card.querySelector("a[href*='filedetails/?id=']");
+    if (!linkElement) {
+      return;
+    }
+
+    const href = normalizeSteamUrl(linkElement.getAttribute('href') || '');
+    const id = parseWorkshopId(href);
+    if (!id || byId.has(id)) {
+      return;
+    }
+
+    const titleElement = card.querySelector('.workshopItemTitle');
+    const authorElement = card.querySelector('.workshopItemAuthorName a, .workshopItemAuthorName');
+    const previewElement = card.querySelector("img[src*='steamusercontent'], img.workshopItemPreviewImage, img");
+    const starsElement = card.querySelector("img[src*='-star.png'], img[src*='not-yet.png']");
+
+    const name = normalizeModTitle(titleElement?.textContent || linkElement.textContent || `Мод #${id}`) || `Мод #${id}`;
+    const author = normalizeModTitle(authorElement?.textContent || 'Неизвестный автор') || 'Неизвестный автор';
+    const authorHref = normalizeSteamUrl(authorElement?.getAttribute?.('href') || '');
+    const preview = normalizeImageUrl(normalizeSteamUrl(previewElement?.getAttribute?.('src') || ''));
+
+    byId.set(id, {
+      id,
+      name,
+      url: href,
+      author,
+      authorUrl: authorHref,
+      preview,
+      stars: parseStars(normalizeSteamUrl(starsElement?.getAttribute?.('src') || '')),
+      visitors: 0,
+      subscribers: 0,
+      favorites: 0,
+      tags: [],
+      description: ''
+    });
+  };
+
+  if (cards.length) {
+    cards.forEach(collectFromCard);
+  }
+
+  if (!byId.size) {
+    const links = [...doc.querySelectorAll("a[href*='filedetails/?id=']")];
+    links.forEach((linkElement) => {
+      const href = normalizeSteamUrl(linkElement.getAttribute('href') || '');
+      const id = parseWorkshopId(href);
+      if (!id || byId.has(id)) {
+        return;
+      }
+
+      const name = normalizeModTitle(linkElement.textContent || `Мод #${id}`) || `Мод #${id}`;
+      byId.set(id, {
+        id,
+        name,
+        url: href,
+        author: 'Неизвестный автор',
+        authorUrl: '',
+        preview: '',
+        stars: 0,
+        visitors: 0,
+        subscribers: 0,
+        favorites: 0,
+        tags: [],
+        description: ''
+      });
+    });
+  }
+
+  const result = [...byId.values()];
+  state.catalogParseMode = 'html';
+  state.catalogExtractedCount = result.length;
+  return result;
+}
+
 function parseRichModsFromMarkdown(text) {
   const content = String(text || '');
+
+  if (/<\s*!doctype\s+html|<\s*html[\s>]/i.test(content)) {
+    const htmlParsed = parseModsFromHtml(content);
+    if (htmlParsed.length) {
+      return htmlParsed;
+    }
+  }
+
   const previewRegex = /\[!\[Image[^\]]*\]\((https?:\/\/images\.steamusercontent\.com\/[^)]+)\)\]\(https?:\/\/steamcommunity\.com\/sharedfiles\/filedetails\/\?id=(\d+)[^)]*\)/g;
   const items = [];
   let previewMatch;
@@ -424,9 +622,64 @@ function parseRichModsFromMarkdown(text) {
   }
 
   if (items.length) {
-    state.catalogParseMode = 'rich';
-    state.catalogExtractedCount = items.length;
-    return items;
+    const basicItems = parseBasicModsFromMarkdown(content);
+    const byId = new Map(basicItems.map((mod) => [mod.id, mod]));
+
+    items.forEach((richMod) => {
+      const base = byId.get(richMod.id) || {
+        id: richMod.id,
+        name: `Мод #${richMod.id}`,
+        url: `https://steamcommunity.com/sharedfiles/filedetails/?id=${richMod.id}`,
+        author: 'Неизвестный автор',
+        authorUrl: '',
+        preview: '',
+        stars: 0,
+        visitors: 0,
+        subscribers: 0,
+        favorites: 0,
+        tags: [],
+        description: ''
+      };
+
+      byId.set(richMod.id, {
+        ...base,
+        ...richMod,
+        name: richMod.name || base.name,
+        author: richMod.author || base.author,
+        authorUrl: richMod.authorUrl || base.authorUrl,
+        preview: richMod.preview || base.preview
+      });
+    });
+
+    const rawIds = [...new Set((content.match(/filedetails\/\?id=(\d+)/g) || [])
+      .map((entry) => String(entry).match(/id=(\d+)/)?.[1])
+      .filter(Boolean))];
+
+    rawIds.forEach((id) => {
+      if (byId.has(id)) {
+        return;
+      }
+
+      byId.set(id, {
+        id,
+        name: `Мод #${id}`,
+        url: `https://steamcommunity.com/sharedfiles/filedetails/?id=${id}`,
+        author: 'Неизвестный автор',
+        authorUrl: '',
+        preview: '',
+        stars: 0,
+        visitors: 0,
+        subscribers: 0,
+        favorites: 0,
+        tags: [],
+        description: ''
+      });
+    });
+
+    const merged = [...byId.values()];
+    state.catalogParseMode = merged.length > items.length ? 'rich+basic' : 'rich';
+    state.catalogExtractedCount = merged.length;
+    return merged;
   }
 
   return parseBasicModsFromMarkdown(content);
@@ -474,21 +727,41 @@ function applyCatalogFilters() {
 
 async function fetchViaProxy(workshopUrl) {
   const encodedUrl = encodeURIComponent(workshopUrl);
-  const proxyUrls = [
+  const proxyUrls = reorderProxyUrls([
     `https://r.jina.ai/http://steamcommunity.com/workshop/browse/?${workshopUrl.split('?')[1] || ''}`,
     `https://api.allorigins.win/raw?url=${encodedUrl}`
-  ];
+  ]);
 
   let lastError = null;
   for (const proxyUrl of proxyUrls) {
-    try {
-      const response = await fetch(proxyUrl, { method: 'GET' });
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`);
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      try {
+        const response = await fetch(proxyUrl, { method: 'GET' });
+        if (!response.ok) {
+          setProxyStatus({ phase: 'Каталог через прокси', url: proxyUrl, status: response.status, ok: false });
+
+          if (response.status === 429 && attempt < 2) {
+            await sleep(450 * (attempt + 1));
+            continue;
+          }
+
+          lastError = new Error(`HTTP ${response.status} (${getHostLabel(proxyUrl)})`);
+          break;
+        }
+
+        const text = await response.text();
+        setProxyStatus({ phase: 'Каталог через прокси', url: proxyUrl, status: response.status, ok: true });
+        return { text, proxyUrl, status: response.status };
+      } catch (error) {
+        setProxyStatus({
+          phase: 'Каталог через прокси',
+          url: proxyUrl,
+          ok: false,
+          message: error?.message || 'ошибка сети'
+        });
+        lastError = error;
+        break;
       }
-      return await response.text();
-    } catch (error) {
-      lastError = error;
     }
   }
 
@@ -515,14 +788,16 @@ function addCatalogModToActiveList(mod) {
   renderCatalogMods(applyCatalogFilters());
 }
 
-function parseDetailMetadata(text) {
+function parseDetailMetadata(text, options = {}) {
+  const { full = true } = options;
   const content = String(text || '');
 
   const descriptionMatch = content.match(/Description\s+([\s\S]*?)\n\s*\d+\s+Comments/i);
   const rawDescriptionMarkdown = descriptionMatch ? descriptionMatch[1].trim() : '';
   const descriptionMarkdown = rawDescriptionMarkdown.replace(/\((https?:\/\/[\s\S]*?)\)/g, (full, url) => `(${String(url).replace(/\s+/g, '')})`);
-  const description = markdownToPlain(descriptionMarkdown);
-  const descriptionHtml = markdownToHtml(descriptionMarkdown);
+  const plainDescription = markdownToPlain(descriptionMarkdown);
+  const description = full ? plainDescription : compactDescriptionText(plainDescription, 220);
+  const descriptionHtml = full ? markdownToHtml(descriptionMarkdown) : '';
 
   const tags = [];
   const tagRegex = /\[([^\]]+)\]\(https:\/\/steamcommunity\.com\/workshop\/browse\/\?[^)]*requiredtags[^)]*\)/g;
@@ -542,12 +817,15 @@ function parseDetailMetadata(text) {
   const sizeMatch = content.match(/([\d.,]+\s*(?:KB|MB|GB))/i);
   const postedMatch = content.match(/Posted\s+([A-Za-z]{3}\s+\d{1,2}(?:\s+@\s+[0-9:apm]+)?)/i);
   const previewMatch = content.match(/\[!\[Image[^\]]*\]\((https?:\/\/images\.steamusercontent\.com\/[^)]+)\)/);
-  const markdownImageMatches = [...descriptionMarkdown.matchAll(/!\[[^\]]*\]\((https?:\/\/[^\s)]+)\)/g)].map((match) => match[1]);
-  const fallbackSteamImageMatches = content.match(/https?:\/\/images\.steamusercontent\.com\/ugc\/[\w/%?=&.-]+/g) || [];
-  const fallbackImgurMatches = content.match(/https?:\/\/i\.imgur\.com\/[\w.-]+\.(?:png|jpe?g|gif|webp|apng)/gi) || [];
-  const descriptionImages = [...new Set([...markdownImageMatches, ...fallbackSteamImageMatches, ...fallbackImgurMatches]
-    .map((url) => normalizeImageUrl(url))
-    .filter((url) => isLikelyImageUrl(url)))].slice(0, 20);
+  const descriptionImages = full
+    ? [...new Set([
+      ...[...descriptionMarkdown.matchAll(/!\[[^\]]*\]\((https?:\/\/[^\s)]+)\)/g)].map((match) => match[1]),
+      ...(content.match(/https?:\/\/images\.steamusercontent\.com\/ugc\/[\w/%?=&.-]+/g) || []),
+      ...(content.match(/https?:\/\/i\.imgur\.com\/[\w.-]+\.(?:png|jpe?g|gif|webp|apng)/gi) || [])
+    ]
+      .map((url) => normalizeImageUrl(url))
+      .filter((url) => isLikelyImageUrl(url)))].slice(0, 20)
+    : [];
 
   return {
     description,
@@ -565,21 +843,169 @@ function parseDetailMetadata(text) {
   };
 }
 
-async function fetchModDetails(mod) {
-  if (detailCache.has(mod.id)) {
-    return detailCache.get(mod.id);
+function parseDetailMetadataFromHtml(text, options = {}) {
+  const { full = true } = options;
+  const content = String(text || '');
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(content, 'text/html');
+  const pageText = doc.body?.textContent || '';
+
+  const descriptionElement = doc.querySelector(
+    '.workshopItemDescription#highlightContent, #highlightContent .workshopItemDescription, #highlightContent, .workshopItemDescription'
+  );
+
+  const descriptionHtml = full ? (descriptionElement?.innerHTML?.trim() || '') : '';
+  const plainDescription = markdownToPlain(descriptionElement?.textContent || '');
+  const description = full ? plainDescription : compactDescriptionText(plainDescription, 220);
+  const descriptionMarkdown = descriptionElement?.textContent?.trim() || '';
+
+  const tags = [...doc.querySelectorAll("a[href*='requiredtags']")]
+    .map((node) => normalizeModTitle(node.textContent || ''))
+    .filter(Boolean)
+    .filter((tag, index, array) => array.indexOf(tag) === index);
+
+  const visitorsMatch = pageText.match(/([\d,\.\s]+)\s+Unique Visitors/i);
+  const subscribersMatch = pageText.match(/([\d,\.\s]+)\s+Current Subscribers/i);
+  const favoritesMatch = pageText.match(/([\d,\.\s]+)\s+Current Favorites/i);
+  const ratingsMatch = pageText.match(/([\d,\.\s]+)\s+ratings/i);
+
+  const sizeMatch = pageText.match(/([\d.,]+\s*(?:KB|MB|GB))/i);
+  const postedMatch = pageText.match(/Posted\s+([A-Za-z]{3}\s+\d{1,2}(?:,\s*\d{4})?(?:\s+@\s+[0-9:apm]+)?)/i);
+
+  const previewElement = doc.querySelector("#previewImageMain, img[src*='images.steamusercontent.com']");
+  const preview = normalizeImageUrl(normalizeSteamUrl(previewElement?.getAttribute('src') || ''));
+
+  const descriptionImages = full
+    ? [...new Set(
+      (descriptionElement ? [...descriptionElement.querySelectorAll('img')] : [])
+        .map((image) => normalizeImageUrl(normalizeSteamUrl(image.getAttribute('src') || '')))
+        .filter((url) => isLikelyImageUrl(url))
+    )].slice(0, 20)
+    : [];
+
+  return {
+    description,
+    descriptionMarkdown,
+    descriptionHtml,
+    tags,
+    visitors: visitorsMatch ? parseNumber(visitorsMatch[1]) : 0,
+    subscribers: subscribersMatch ? parseNumber(subscribersMatch[1]) : 0,
+    favorites: favoritesMatch ? parseNumber(favoritesMatch[1]) : 0,
+    ratings: ratingsMatch ? parseNumber(ratingsMatch[1]) : 0,
+    fileSize: sizeMatch ? sizeMatch[1] : '',
+    posted: postedMatch ? postedMatch[1] : '',
+    preview,
+    descriptionImages
+  };
+}
+
+function parseDetailMetadataSmart(text, options = {}) {
+  const { full = true } = options;
+  const content = String(text || '');
+  if (/<\s*!doctype\s+html|<\s*html[\s>]/i.test(content)) {
+    const htmlData = parseDetailMetadataFromHtml(content, { full });
+    const hasUsefulData = Boolean(
+      htmlData.description ||
+      htmlData.descriptionHtml ||
+      htmlData.tags.length ||
+      htmlData.subscribers ||
+      htmlData.descriptionImages.length
+    );
+
+    if (hasUsefulData) {
+      return htmlData;
+    }
   }
 
-  const url = `https://r.jina.ai/http://steamcommunity.com/sharedfiles/filedetails/?id=${encodeURIComponent(mod.id)}`;
-  const response = await fetch(url, { method: 'GET' });
-  if (!response.ok) {
-    throw new Error(`HTTP ${response.status}`);
+  return parseDetailMetadata(content, { full });
+}
+
+function hasUsefulLiteDetails(details) {
+  return Boolean(
+    details?.description ||
+    details?.subscribers ||
+    details?.favorites ||
+    details?.visitors ||
+    details?.fileSize ||
+    (details?.tags && details.tags.length)
+  );
+}
+
+function hasUsefulFullDetails(details) {
+  return Boolean(details?.descriptionHtml || (details?.descriptionImages && details.descriptionImages.length));
+}
+
+async function fetchModDetails(mod, options = {}) {
+  const { full = false } = options;
+  const requestedLevel = full ? 'full' : 'lite';
+  const cached = detailCache.get(mod.id);
+  if (cached?.data) {
+    if (cached.level === 'full' || requestedLevel === 'lite') {
+      return cached.data;
+    }
   }
 
-  const text = await response.text();
-  const parsed = parseDetailMetadata(text);
-  detailCache.set(mod.id, parsed);
-  return parsed;
+  const requestKey = `${mod.id}:${requestedLevel}`;
+  if (detailInFlight.has(requestKey)) {
+    return detailInFlight.get(requestKey);
+  }
+
+  const requestPromise = (async () => {
+    const directUrl = `https://steamcommunity.com/sharedfiles/filedetails/?id=${encodeURIComponent(mod.id)}`;
+    const proxyUrls = reorderProxyUrls([
+      `https://r.jina.ai/http://steamcommunity.com/sharedfiles/filedetails/?id=${encodeURIComponent(mod.id)}`,
+      `https://api.allorigins.win/raw?url=${encodeURIComponent(directUrl)}`
+    ]);
+
+    let lastError = null;
+    for (const proxyUrl of proxyUrls) {
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        let response;
+        try {
+          response = await fetch(proxyUrl, { method: 'GET' });
+        } catch (error) {
+          setProxyStatus({
+            phase: `Детали мода ${mod.id}`,
+            url: proxyUrl,
+            ok: false,
+            message: error?.message || 'ошибка сети'
+          });
+          lastError = error;
+          break;
+        }
+
+        if (!response.ok) {
+          setProxyStatus({ phase: `Детали мода ${mod.id}`, url: proxyUrl, status: response.status, ok: false });
+          if (response.status === 429 && attempt < 2) {
+            await sleep(450 * (attempt + 1));
+            continue;
+          }
+          lastError = new Error(`HTTP ${response.status}`);
+          break;
+        }
+
+        setProxyStatus({ phase: `Детали мода ${mod.id}`, url: proxyUrl, status: response.status, ok: true });
+        const text = await response.text();
+        const parsed = parseDetailMetadataSmart(text, { full });
+        const existing = detailCache.get(mod.id);
+        if (full || !existing?.data) {
+          detailCache.set(mod.id, { level: requestedLevel, data: parsed });
+        } else if (existing.level !== 'full') {
+          detailCache.set(mod.id, { level: 'lite', data: mergeModDetails(existing.data, parsed) });
+        }
+        return parsed;
+      }
+    }
+
+    throw lastError || new Error('Не удалось загрузить детали мода через прокси');
+  })();
+
+  detailInFlight.set(requestKey, requestPromise);
+  try {
+    return await requestPromise;
+  } finally {
+    detailInFlight.delete(requestKey);
+  }
 }
 
 function mergeModDetails(mod, details) {
@@ -600,6 +1026,19 @@ function mergeModDetails(mod, details) {
   };
 }
 
+function compactDescriptionText(value, maxLength = 170) {
+  const text = String(value || '').replace(/\s+/g, ' ').trim();
+  if (!text) {
+    return '';
+  }
+
+  if (text.length <= maxLength) {
+    return text;
+  }
+
+  return `${text.slice(0, maxLength).trimEnd()}…`;
+}
+
 function formatInt(value) {
   return Number(value || 0).toLocaleString('ru-RU');
 }
@@ -613,7 +1052,28 @@ function starsText(stars) {
 
 function updateCatalogPageUI() {
   elements.catalogPageDisplay.textContent = `Страница: ${state.catalogPage}`;
-  elements.catalogPrevPageBtn.disabled = state.catalogPage <= 1;
+  const cooldownActive = isCatalogPageCooldownActive();
+  const controlsLocked = state.isCatalogLoading || cooldownActive;
+
+  elements.catalogPrevPageBtn.disabled = state.catalogPage <= 1 || controlsLocked;
+  elements.catalogNextPageBtn.disabled = controlsLocked;
+  elements.catalogGoPageBtn.disabled = controlsLocked;
+  elements.catalogGoPageInput.disabled = controlsLocked;
+
+  elements.catalogPrevPageBtn.classList.toggle('wait-state', controlsLocked);
+  elements.catalogNextPageBtn.classList.toggle('wait-state', controlsLocked);
+  elements.catalogGoPageBtn.classList.toggle('wait-state', controlsLocked);
+
+  if (controlsLocked) {
+    elements.catalogPrevPageBtn.textContent = PAGINATION_LABELS.wait;
+    elements.catalogNextPageBtn.textContent = PAGINATION_LABELS.wait;
+    elements.catalogGoPageBtn.textContent = PAGINATION_LABELS.wait;
+  } else {
+    elements.catalogPrevPageBtn.textContent = PAGINATION_LABELS.prev;
+    elements.catalogNextPageBtn.textContent = PAGINATION_LABELS.next;
+    elements.catalogGoPageBtn.textContent = PAGINATION_LABELS.go;
+  }
+
   elements.loadCatalogBtn.textContent = 'Загрузить моды';
 }
 
@@ -677,6 +1137,7 @@ function renderModDetailContent(mod) {
 
   const descriptionWrap = document.createElement('div');
   descriptionWrap.className = 'mod-detail-description';
+  const fullDetailsLoaded = hasUsefulFullDetails(mod);
   if (mod.descriptionHtml?.trim()) {
     descriptionWrap.innerHTML = mod.descriptionHtml;
     descriptionWrap.querySelectorAll('img').forEach((image) => {
@@ -697,6 +1158,10 @@ function renderModDetailContent(mod) {
     placeholder.style.maxHeight = 'none';
     placeholder.textContent = 'Описание пока недоступно.';
 
+    descriptionWrap.append(placeholder);
+  }
+
+  if (!fullDetailsLoaded) {
     const loadDetailsBtn = document.createElement('button');
     loadDetailsBtn.className = 'accent-btn';
     loadDetailsBtn.textContent = 'Подгрузить детали';
@@ -704,21 +1169,21 @@ function renderModDetailContent(mod) {
       loadDetailsBtn.disabled = true;
       loadDetailsBtn.textContent = 'Загрузка...';
       try {
-        const details = await fetchModDetails(mod);
+        const details = await fetchModDetails(mod, { full: true });
         const merged = mergeModDetails(mod, details);
         const index = state.catalogMods.findIndex((entry) => entry.id === mod.id);
         if (index >= 0) {
           state.catalogMods[index] = merged;
-          renderModDetailContent(merged);
           renderCatalogMods(applyCatalogFilters());
         }
+        renderModDetailContent(merged);
       } catch {
         loadDetailsBtn.disabled = false;
         loadDetailsBtn.textContent = 'Повторить подгрузку';
       }
     });
 
-    descriptionWrap.append(placeholder, loadDetailsBtn);
+    descriptionWrap.append(loadDetailsBtn);
   }
 
   const meta = document.createElement('div');
@@ -778,19 +1243,19 @@ async function openModDetail(mod) {
   renderModDetailContent(mod);
   elements.modDetailModal.classList.remove('hidden');
 
-  if (mod.description && mod.subscribers) {
+  if (hasUsefulLiteDetails(mod)) {
     return;
   }
 
   try {
-    const details = await fetchModDetails(mod);
+    const details = await fetchModDetails(mod, { full: false });
     const merged = mergeModDetails(mod, details);
     const index = state.catalogMods.findIndex((entry) => entry.id === mod.id);
     if (index >= 0) {
       state.catalogMods[index] = merged;
-      renderModDetailContent(merged);
       renderCatalogMods(applyCatalogFilters());
     }
+    renderModDetailContent(merged);
   } catch {
   }
 }
@@ -861,7 +1326,7 @@ function renderCatalogMods(mods) {
 
     const description = document.createElement('div');
     description.className = 'catalog-description';
-    description.textContent = mod.description || 'Описание будет доступно после обогащения карточек.';
+    description.textContent = compactDescriptionText(mod.description) || 'Описание доступно после подгрузки деталей в попапе.';
 
     const tags = document.createElement('div');
     tags.className = 'catalog-tags';
@@ -898,30 +1363,9 @@ function renderCatalogMods(mods) {
       addCatalogModToActiveList(mod);
     });
 
-    const detailsBtn = document.createElement('button');
-    detailsBtn.className = 'ghost-btn';
-    detailsBtn.textContent = 'Подгрузить детали';
-    detailsBtn.addEventListener('click', async (event) => {
-      event.stopPropagation();
-      detailsBtn.disabled = true;
-      detailsBtn.textContent = 'Загрузка...';
-      try {
-        const details = await fetchModDetails(mod);
-        const merged = mergeModDetails(mod, details);
-        const index = state.catalogMods.findIndex((entry) => entry.id === mod.id);
-        if (index >= 0) {
-          state.catalogMods[index] = merged;
-          renderCatalogMods(applyCatalogFilters());
-        }
-      } catch {
-        detailsBtn.textContent = 'Ошибка';
-        detailsBtn.disabled = false;
-      }
-    });
-
     openLink.addEventListener('click', (event) => event.stopPropagation());
 
-    links.append(openLink, addBtn, detailsBtn);
+    links.append(openLink, addBtn);
     body.append(title, author, badges, description, tags, meta, links);
     card.append(preview, body);
     elements.catalogMods.appendChild(card);
@@ -932,7 +1376,8 @@ function renderCatalogMods(mods) {
 }
 
 async function enrichCatalogMods(limit = 12, options = {}) {
-  const { allowDuringLoading = false } = options;
+  const { allowDuringLoading = false, mode = 'lite' } = options;
+  const full = mode === 'full';
 
   if (state.isCatalogLoading && !allowDuringLoading) {
     elements.catalogStatus.textContent = 'Дождись завершения текущей загрузки каталога.';
@@ -947,17 +1392,22 @@ async function enrichCatalogMods(limit = 12, options = {}) {
     return;
   }
 
-  const pending = state.catalogMods.filter((mod) => !mod.description || !mod.subscribers).slice(0, limit);
+  const pending = state.catalogMods
+    .filter((mod) => (full ? !hasUsefulFullDetails(mod) : !hasUsefulLiteDetails(mod)))
+    .slice(0, limit);
   if (!pending.length) {
-    elements.catalogStatus.textContent = 'Карточки уже обогащены.';
+    elements.catalogStatus.textContent = full
+      ? 'Полные карточки уже загружены.'
+      : 'Карточки уже содержат основную информацию.';
     return;
   }
 
-  elements.catalogStatus.textContent = `Обогащение карточек: 0/${pending.length}`;
+  const statusPrefix = full ? 'Полная подгрузка карточек' : 'Быстрая подгрузка карточек';
+  elements.catalogStatus.textContent = `${statusPrefix}: 0/${pending.length}`;
   if (!allowDuringLoading) {
-    setCatalogLoading(true, `Обогащение: 0/${pending.length}`);
+    setCatalogLoading(true, `${statusPrefix}: 0/${pending.length}`);
   }
-  const concurrency = 4;
+  const concurrency = full ? 2 : 4;
   let done = 0;
   const queue = [...pending];
 
@@ -969,7 +1419,7 @@ async function enrichCatalogMods(limit = 12, options = {}) {
       }
 
       try {
-        const details = await fetchModDetails(mod);
+        const details = await fetchModDetails(mod, { full });
         const merged = mergeModDetails(mod, details);
         const index = state.catalogMods.findIndex((entry) => entry.id === mod.id);
         if (index >= 0) {
@@ -979,9 +1429,9 @@ async function enrichCatalogMods(limit = 12, options = {}) {
       }
 
       done += 1;
-      elements.catalogStatus.textContent = `Обогащение карточек: ${done}/${pending.length}`;
+      elements.catalogStatus.textContent = `${statusPrefix}: ${done}/${pending.length}`;
       if (!allowDuringLoading) {
-        setCatalogLoading(true, `Обогащение: ${done}/${pending.length}`);
+        setCatalogLoading(true, `${statusPrefix}: ${done}/${pending.length}`);
       }
     }
   };
@@ -1025,14 +1475,44 @@ async function loadCatalogMods(options = {}) {
   updateCatalogPageUI();
 
   try {
-    const text = await fetchViaProxy(workshopUrl);
-    const mods = parseRichModsFromMarkdown(text);
+    const { text, proxyUrl, status } = await fetchViaProxy(workshopUrl);
+    const parsedMods = parseRichModsFromMarkdown(text);
+    const selectedCount = Number(elements.catalogCountSelect.value || 15);
+    const displayCount = Math.max(15, selectedCount);
+    const mods = parsedMods.slice(0, displayCount);
+    const rawIds = text.match(/filedetails\/\?id=\d+/g) || [];
+    if (parsedMods.length === 0 && rawIds.length > 0) {
+      setProxyStatus({
+        phase: 'Каталог через прокси',
+        url: proxyUrl,
+        status,
+        ok: false,
+        message: `HTTP ${status}, но карточки не распознаны (${rawIds.length} id в ответе)`
+      });
+    } else if (parsedMods.length === 0) {
+      setProxyStatus({
+        phase: 'Каталог через прокси',
+        url: proxyUrl,
+        status,
+        ok: false,
+        message: `HTTP ${status}, но ответ не содержит карточек` 
+      });
+    } else {
+      setProxyStatus({
+        phase: 'Каталог через прокси',
+        url: proxyUrl,
+        status,
+        ok: true,
+        message: `распознано: ${parsedMods.length}, показано: ${mods.length}`
+      });
+    }
+
     const totalInSteam = parseSteamTotalFromMarkdown(text);
     if (totalInSteam > 0) {
       state.catalogTotalInSteam = totalInSteam;
     }
 
-    const expected = Number(elements.catalogCountSelect.value || 30);
+    const expected = Number(elements.catalogCountSelect.value || 15);
     setCatalogLoading(true, `Подгрузка страницы ${targetPage}: ${mods.length}/${expected}`);
 
     if (append && mods.length === 0) {
@@ -1061,7 +1541,9 @@ async function loadCatalogMods(options = {}) {
 
     state.lastLoadedPage = targetPage;
     renderCatalogMods(applyCatalogFilters());
-    await enrichCatalogMods(8, { allowDuringLoading: true });
+    if (state.catalogMods.length && state.autoFullCatalog) {
+      await enrichCatalogMods(Math.max(1, state.catalogMods.length), { allowDuringLoading: true, mode: 'full' });
+    }
     setCatalogLoading(false);
     updateCatalogPageUI();
   } catch (error) {
@@ -1484,23 +1966,25 @@ function setupEvents() {
   });
 
   elements.catalogPrevPageBtn.addEventListener('click', () => {
-    if (state.isCatalogLoading) {
+    if (state.isCatalogLoading || isCatalogPageCooldownActive()) {
       return;
     }
     state.catalogPage = Math.max(1, state.catalogPage - 1);
+    setCatalogPageCooldown(1000);
     loadCatalogMods({ append: false, page: state.catalogPage });
   });
 
   elements.catalogNextPageBtn.addEventListener('click', () => {
-    if (state.isCatalogLoading) {
+    if (state.isCatalogLoading || isCatalogPageCooldownActive()) {
       return;
     }
     state.catalogPage += 1;
+    setCatalogPageCooldown(1000);
     loadCatalogMods({ append: false, page: state.catalogPage });
   });
 
   elements.catalogGoPageBtn.addEventListener('click', () => {
-    if (state.isCatalogLoading) {
+    if (state.isCatalogLoading || isCatalogPageCooldownActive()) {
       return;
     }
     const page = Number(elements.catalogGoPageInput.value.trim());
@@ -1508,6 +1992,7 @@ function setupEvents() {
       return;
     }
     state.catalogPage = Math.floor(page);
+    setCatalogPageCooldown(1000);
     loadCatalogMods({ append: false, page: state.catalogPage });
   });
 
@@ -1535,7 +2020,25 @@ function setupEvents() {
     }
   });
 
-  elements.enrichCatalogBtn.addEventListener('click', () => enrichCatalogMods(Math.max(1, state.catalogMods.length)));
+  elements.catalogAutoFullToggle.addEventListener('change', () => {
+    state.autoFullCatalog = elements.catalogAutoFullToggle.checked;
+    if (!state.autoFullCatalog || !state.catalogMods.length) {
+      return;
+    }
+
+    enrichCatalogMods(Math.max(1, state.catalogMods.length), { mode: 'full' });
+  });
+
+  elements.proxyPrioritySelect.addEventListener('change', () => {
+    const selected = elements.proxyPrioritySelect.value;
+    state.preferredProxy = ['auto', 'rjina', 'allorigins'].includes(selected) ? selected : 'auto';
+    saveState();
+
+    if (state.catalogMods.length) {
+      state.catalogPage = 1;
+      loadCatalogMods({ append: false, page: state.catalogPage });
+    }
+  });
 
   const catalogFilterHandler = () => {
     renderCatalogMods(applyCatalogFilters());
@@ -1621,6 +2124,13 @@ function setupEvents() {
 
 function init() {
   loadState();
+  if (elements.catalogAutoFullToggle) {
+    elements.catalogAutoFullToggle.checked = false;
+  }
+  state.autoFullCatalog = false;
+  if (elements.proxyPrioritySelect) {
+    elements.proxyPrioritySelect.value = state.preferredProxy;
+  }
   renderAll();
   updateCatalogDebugLine();
   setupEvents();

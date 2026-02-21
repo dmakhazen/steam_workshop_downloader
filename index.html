@@ -151,11 +151,24 @@
         <div class="catalog-main-actions">
           <button id="loadCatalogBtn" class="accent-btn primary-load-btn">Загрузить моды</button>
           <div id="catalogLoadProgress" class="load-progress hidden">Загрузка...</div>
-          <button id="enrichCatalogBtn" class="ghost-btn">Обогатить карточки</button>
+          <label class="catalog-toggle" for="catalogAutoFullToggle">
+            <input id="catalogAutoFullToggle" type="checkbox" />
+            <span class="catalog-toggle-slider" aria-hidden="true"></span>
+            <span class="catalog-toggle-text">Скачивать полную карточку сразу</span>
+          </label>
+          <label class="proxy-priority-control">
+            <span>Прокси (первый запрос)</span>
+            <select id="proxyPrioritySelect">
+              <option value="auto" selected>Авто (r.jina.ai → allorigins)</option>
+              <option value="rjina">Сначала r.jina.ai</option>
+              <option value="allorigins">Сначала allorigins</option>
+            </select>
+          </label>
           <label>
             <span>Модов за загрузку</span>
             <select id="catalogCountSelect">
-              <option value="30" selected>30</option>
+              <option value="15" selected>15</option>
+              <option value="30">30</option>
               <option value="50">50</option>
               <option value="75">75</option>
               <option value="100">100</option>
@@ -180,6 +193,7 @@
         </div>
         <p class="catalog-note">Карточки загружаются через публичный прокси (без Steam API ключей). Если временно не работает — попробуй обновить позже.</p>
         <div id="catalogStatus" class="catalog-status">Нажми «Загрузить моды», чтобы получить список.</div>
+        <div id="proxyStatus" class="proxy-status proxy-status--info">Прокси: ожидание запроса…</div>
         <div id="catalogDebug" class="catalog-debug">Парсинг: —</div>
         <div id="catalogStats" class="catalog-stats">Статистика появится после первой загрузки.</div>
         <ul id="catalogMods" class="catalog-mods view-default"></ul>
@@ -235,6 +249,20 @@
       <div id="modDetailBody" class="mod-detail-body"></div>
     </div>
   </div>
+
+  <!-- Yandex.Metrika counter -->
+  <script type="text/javascript">
+    (function(m,e,t,r,i,k,a){
+        m[i]=m[i]||function(){(m[i].a=m[i].a||[]).push(arguments)};
+        m[i].l=1*new Date();
+        for (var j = 0; j < document.scripts.length; j++) {if (document.scripts[j].src === r) { return; }}
+        k=e.createElement(t),a=e.getElementsByTagName(t)[0],k.async=1,k.src=r,a.parentNode.insertBefore(k,a)
+    })(window, document,'script','https://mc.yandex.ru/metrika/tag.js?id=106948857', 'ym');
+
+    ym(106948857, 'init', {ssr:true, webvisor:true, clickmap:true, ecommerce:"dataLayer", referrer: document.referrer, url: location.href, accurateTrackBounce:true, trackLinks:true});
+  </script>
+  <noscript><div><img src="https://mc.yandex.ru/watch/106948857" style="position:absolute; left:-9999px;" alt="" /></div></noscript>
+  <!-- /Yandex.Metrika counter -->
 
   <script src="app.js"></script>
 </body>
