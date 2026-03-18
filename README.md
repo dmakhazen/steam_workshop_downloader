@@ -1,3 +1,5 @@
+https://dmakhazen.github.io/steam_workshop_downloader/
+
 # SteamMod Manager
 
 Статическое веб-приложение для работы со списками модов Steam Workshop:
